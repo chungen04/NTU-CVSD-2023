@@ -3,7 +3,6 @@
 `define RST_DELAY   2
 `define MAX_CYCLE   100000
 
-
 `ifdef I0
     `define Inst_I  "../00_TESTBED/pattern/INST0_I.dat"
     `define Inst_O  "../00_TESTBED/pattern/INST0_O.dat"
@@ -66,6 +65,7 @@ module testbed;
     wire signed [DATA_W-1:0] o_data;
 
     // self defined
+    reg                      next;
     integer                  i;
     integer                  j;
     integer                  error;
@@ -111,9 +111,11 @@ module testbed;
         i_data_a = 0;
         i_data_b = 0;
         i_inst   = 0;
+        next     = 1;
         reset;
 
         while (i < `PAT_NUM) begin
+            wait(next)
             @(negedge i_clk);
             i_valid = $random;
 	        if (i_valid) begin
@@ -121,6 +123,9 @@ module testbed;
             	i_data_a = inst_idata[i][DATA_W+:DATA_W];
             	i_inst   = inst_idata[i][2*DATA_W+:INST_W];
             	i = i + 1;
+                next = 0;
+                @(negedge i_clk);
+                i_valid = 0;
 	        end
         end
         @(negedge i_clk);
@@ -145,6 +150,7 @@ module testbed;
                     error = error+1;        
                 end 
                 j=j+1;
+                next = 1;
             end
         end
 
