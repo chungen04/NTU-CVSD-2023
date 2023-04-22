@@ -1,74 +1,3 @@
-module sort9(
-	data_9,
-	sort9
-); // the sorted elements obtained to get the final median. 
-	input [71:0] data_9;
-	reg [7:0] a1, a2, a3, b1, b2, b3, c1, c2, c3;
-	output reg [71:0] sort9;
-	always @(*) begin
-		a1 = data_9[71:64];
-		a2 = data_9[63:56];
-		a3 = data_9[55:48];
-		b1 = data_9[47:40];
-		b2 = data_9[39:32];
-		b3 = data_9[31:24];
-		c1 = data_9[23:16];
-		c2 = data_9[15:8];
-		c3 = data_9[7:0];
-		if(a1>a2) {a1, a2} = {a2, a1};
-		if(a2>a3) {a2, a3} = {a3, a2};
-		if(a1>a2) {a1, a2} = {a2, a1};
-		if(b1>b2) {b1, b2} = {b2, b1};
-		if(b2>b3) {b2, b3} = {b3, b2};
-		if(b1>b2) {b1, b2} = {b2, b1};
-		if(c1>c2) {c1, c2} = {c2, c1};
-		if(c2>c3) {c2, c3} = {c3, c2};
-		if(c1>c2) {c1, c2} = {c2, c1};
-		sort9 = {a1, a2, a3, b1, b2, b3, c1, c2, c3};
-	end
-endmodule
-
-module sort9_2(
-	data_9,
-	sort9_2
-);
-	input [71:0] data_9;
-	reg [7:0] a1, a2, a3, b1, b2, b3, c1, c2, c3;
-	output reg [7:0] sort9_2; 
-	always @(*) begin
-		a1 = data_9[71:64];
-		a2 = data_9[63:56];
-		a3 = data_9[55:48];
-		b1 = data_9[47:40];
-		b2 = data_9[39:32];
-		b3 = data_9[31:24];
-		c1 = data_9[23:16];
-		c2 = data_9[15:8];
-		c3 = data_9[7:0];
-		if(a2>b2) begin 
-			{a1, b1} = {b1, a1};
-			{a2, b2} = {b2, a2};
-			{a3, b3} = {b3, a3};
-		end
-		if(b2>c2) begin
-			{b1, c1} = {c1, b1};
-			{b2, c2} = {c2, b2};
-			{b3, c3} = {c3, b3};
-		end
-		if(a2>b2) begin 
-			{a1, b1} = {b1, a1};
-			{a2, b2} = {b2, a2};
-			{a3, b3} = {b3, a3};
-		end
-		
-		if(a3>b2) {a3, b2} = {b2, a3};
-		if(b2>c1) {b2, c1} = {c1, b2};
-		if(a3>b2) {a3, b2} = {b2, a3};
-
-		sort9_2 = b2;
-	end
-endmodule
-
 module core (                       //Don't modify interface
 	input         i_clk,
 	input         i_rst_n,
@@ -156,15 +85,14 @@ reg [2:0] med_channel_counter_r, med_channel_counter_w; // 0~3, 4 channels
 reg [2:0] med_region_counter_r, med_region_counter_w; // 0~3, in raster scan order
 
 reg [7:0] med_temp_data_r [15:0];
-reg [7:0] med_temp_data_w [15:0]; // save the display region value.
+reg [7:0] med_temp_data_w [15:0]; // save the display region value.(4*4)
+reg [7:0] med_sort_data_r [8:0];
+reg [7:0] med_sort_data_w [8:0]; // save the sorting values. (3*3) 
+
 reg med_done; // do it when output is done.
 reg med_flag_valid_r, med_flag_valid_w;
 reg [4:0] med_stage_r, med_stage_w; // 0 for load
 reg [4:0] med_load_counter_r, med_load_counter_w; // from 0 to 16(counter to load values in)
-reg [71:0] med_sort_temp_r;
-wire [71:0] med_sort_temp_w; // sort pipeline register.
-reg [71:0] sort_in_stage_1;
-wire [7:0] med_result;
 
 sram_4096x8 mem(
    .Q(read_data),
@@ -174,17 +102,6 @@ sram_4096x8 mem(
    .A(addr),
    .D(i_in_data)
 );
-
-sort9 sort_1(
-	.data_9(sort_in_stage_1),
-	.sort9(med_sort_temp_w)
-);
-
-sort9_2 sort_2(
-	.data_9(med_sort_temp_r),
-	.sort9_2(med_result)
-);
-
 // ---------------------------------------------------------------------------
 // Continuous Assignment
 // ---------------------------------------------------------------------------
@@ -234,7 +151,7 @@ always @(*) begin
 		end
 	end
 	S_MEDIAN: begin
-		if(med_stage_r == 3 && med_channel_counter_r ==3 && med_done) begin
+		if(med_stage_r == 11 && med_channel_counter_r == 3 && result_flag_w && med_region_counter_r == 3) begin
 			state_w = S_IDLE;
 		end
 	end
@@ -273,10 +190,14 @@ always @(*) begin
 	med_load_counter_w = (state_r == S_MEDIAN? med_load_counter_r: 0);
 	med_flag_valid_w = 0;
 	med_channel_counter_w = (state_r == S_MEDIAN? med_channel_counter_r: 0);
-	sort_in_stage_1 = 0;
-	for(i=0;i<9;i=i+1) begin
+	for(i=0;i<16;i=i+1) begin
 		med_temp_data_w[i] = med_temp_data_r[i];
 	end
+	for(i=0;i<9;i=i+1) begin
+		med_sort_data_w[i] = med_sort_data_r[i];
+	end
+	med_region_counter_w = med_region_counter_r; 
+	
 
 	case(state_r)
 	S_IDLE: begin
@@ -351,6 +272,7 @@ always @(*) begin
 		0: begin
 			// load
 			med_load_counter_w = med_load_counter_r + 1;
+			med_region_counter_w = 0;
 			case(med_load_counter_r)
 			0: begin
 				if(origin_x_r != 0 && origin_y_r != 0) begin
@@ -525,61 +447,177 @@ always @(*) begin
 			end
 			endcase
 		end
-		1:begin
-			// first region
-			sort_in_stage_1 = {med_temp_data_r[0], med_temp_data_r[1], med_temp_data_r[2], 
-				med_temp_data_r[4], med_temp_data_r[5], med_temp_data_r[6], 
-				med_temp_data_r[8], med_temp_data_r[9], med_temp_data_r[10]
-			};
+		1: begin
+			case(med_region_counter_r) 
+				0: begin
+					med_sort_data_w[0] = med_temp_data_r[0];
+					med_sort_data_w[1] = med_temp_data_r[1];
+					med_sort_data_w[2] = med_temp_data_r[2];
+					med_sort_data_w[3] = med_temp_data_r[4];
+					med_sort_data_w[4] = med_temp_data_r[5];
+					med_sort_data_w[5] = med_temp_data_r[6];
+					med_sort_data_w[6] = med_temp_data_r[8];
+					med_sort_data_w[7] = med_temp_data_r[9];
+					med_sort_data_w[8] = med_temp_data_r[10];
+				end
+				1: begin
+					med_sort_data_w[0] = med_temp_data_r[1];
+					med_sort_data_w[1] = med_temp_data_r[2];
+					med_sort_data_w[2] = med_temp_data_r[3];
+					med_sort_data_w[3] = med_temp_data_r[5];
+					med_sort_data_w[4] = med_temp_data_r[6];
+					med_sort_data_w[5] = med_temp_data_r[7];
+					med_sort_data_w[6] = med_temp_data_r[9];
+					med_sort_data_w[7] = med_temp_data_r[10];
+					med_sort_data_w[8] = med_temp_data_r[11];
+				end
+				2: begin
+					med_sort_data_w[0] = med_temp_data_r[4];
+					med_sort_data_w[1] = med_temp_data_r[5];
+					med_sort_data_w[2] = med_temp_data_r[6];
+					med_sort_data_w[3] = med_temp_data_r[8];
+					med_sort_data_w[4] = med_temp_data_r[9];
+					med_sort_data_w[5] = med_temp_data_r[10];
+					med_sort_data_w[6] = med_temp_data_r[12];
+					med_sort_data_w[7] = med_temp_data_r[13];
+					med_sort_data_w[8] = med_temp_data_r[14];
+				end
+				3: begin
+					med_sort_data_w[0] = med_temp_data_r[5];
+					med_sort_data_w[1] = med_temp_data_r[6];
+					med_sort_data_w[2] = med_temp_data_r[7];
+					med_sort_data_w[3] = med_temp_data_r[9];
+					med_sort_data_w[4] = med_temp_data_r[10];
+					med_sort_data_w[5] = med_temp_data_r[11];
+					med_sort_data_w[6] = med_temp_data_r[13];
+					med_sort_data_w[7] = med_temp_data_r[14];
+					med_sort_data_w[8] = med_temp_data_r[15];
+				end
+			endcase
 			med_stage_w = 2;
 		end
 		2:begin
-			result_w = med_result;
-			result_flag_w = 1;
+			// vertical sort
+			if(med_sort_data_r[0] > med_sort_data_r[1]) begin
+				med_sort_data_w[0] = med_sort_data_r[1];
+				med_sort_data_w[1] = med_sort_data_r[0]; 
+			end
+			if(med_sort_data_r[3] > med_sort_data_r[4]) begin
+				med_sort_data_w[3] = med_sort_data_r[4];
+				med_sort_data_w[4] = med_sort_data_r[3];
+			end
+			if(med_sort_data_r[6] > med_sort_data_r[7]) begin
+				med_sort_data_w[6] = med_sort_data_r[7];
+				med_sort_data_w[7] = med_sort_data_r[6];
+			end
 			med_stage_w = 3;
 		end
 		3:begin
-			// second region
-			sort_in_stage_1 = {med_temp_data_r[1], med_temp_data_r[2], med_temp_data_r[3], 
-				med_temp_data_r[5], med_temp_data_r[6], med_temp_data_r[7], 
-				med_temp_data_r[9], med_temp_data_r[10], med_temp_data_r[11]
-			};
+			if(med_sort_data_r[1] > med_sort_data_r[2]) begin
+				med_sort_data_w[1] = med_sort_data_r[2];
+				med_sort_data_w[2] = med_sort_data_r[1]; 
+			end
+			if(med_sort_data_r[4] > med_sort_data_r[5]) begin
+				med_sort_data_w[4] = med_sort_data_r[5];
+				med_sort_data_w[5] = med_sort_data_r[4];
+			end
+			if(med_sort_data_r[7] > med_sort_data_r[8]) begin
+				med_sort_data_w[7] = med_sort_data_r[8];
+				med_sort_data_w[8] = med_sort_data_r[7];
+			end
 			med_stage_w = 4;
 		end
-		4: begin
-			result_w = med_result;
-			result_flag_w = 1;
+		4:begin
+			if(med_sort_data_r[0] > med_sort_data_r[1]) begin
+				med_sort_data_w[0] = med_sort_data_r[1];
+				med_sort_data_w[1] = med_sort_data_r[0]; 
+			end
+			if(med_sort_data_r[3] > med_sort_data_r[4]) begin
+				med_sort_data_w[3] = med_sort_data_r[4];
+				med_sort_data_w[4] = med_sort_data_r[3];
+			end
+			if(med_sort_data_r[6] > med_sort_data_r[7]) begin
+				med_sort_data_w[6] = med_sort_data_r[7];
+				med_sort_data_w[7] = med_sort_data_r[6];
+			end
 			med_stage_w = 5;
 		end
-		5:begin
-			// second region
-			sort_in_stage_1 = {med_temp_data_r[4], med_temp_data_r[5], med_temp_data_r[6], 
-				med_temp_data_r[8], med_temp_data_r[9], med_temp_data_r[10], 
-				med_temp_data_r[12], med_temp_data_r[13], med_temp_data_r[14]
-			};
+		5: begin
+			if(med_sort_data_r[0] > med_sort_data_r[3]) begin
+				med_sort_data_w[0] = med_sort_data_r[3];
+				med_sort_data_w[3] = med_sort_data_r[0]; 
+			end
+			if(med_sort_data_r[1] > med_sort_data_r[4]) begin
+				med_sort_data_w[1] = med_sort_data_r[4];
+				med_sort_data_w[4] = med_sort_data_r[1];
+			end
+			if(med_sort_data_r[2] > med_sort_data_r[5]) begin
+				med_sort_data_w[2] = med_sort_data_r[5];
+				med_sort_data_w[5] = med_sort_data_r[2];
+			end
 			med_stage_w = 6;
 		end
-		6: begin
-			result_w = med_result;
-			result_flag_w = 1;
+		6:begin
+			if(med_sort_data_r[3] > med_sort_data_r[6]) begin
+				med_sort_data_w[3] = med_sort_data_r[6];
+				med_sort_data_w[6] = med_sort_data_r[3]; 
+			end
+			if(med_sort_data_r[4] > med_sort_data_r[7]) begin
+				med_sort_data_w[4] = med_sort_data_r[7];
+				med_sort_data_w[7] = med_sort_data_r[4];
+			end
+			if(med_sort_data_r[5] > med_sort_data_r[8]) begin
+				med_sort_data_w[5] = med_sort_data_r[8];
+				med_sort_data_w[8] = med_sort_data_r[5];
+			end
 			med_stage_w = 7;
 		end
-		7:begin
-			// second region
-			sort_in_stage_1 = {med_temp_data_r[5], med_temp_data_r[6], med_temp_data_r[7], 
-				med_temp_data_r[9], med_temp_data_r[10], med_temp_data_r[11], 
-				med_temp_data_r[13], med_temp_data_r[14], med_temp_data_r[15]
-			};
+		7: begin
+			if(med_sort_data_r[0] > med_sort_data_r[3]) begin
+				med_sort_data_w[0] = med_sort_data_r[3];
+				med_sort_data_w[3] = med_sort_data_r[0]; 
+			end
+			if(med_sort_data_r[1] > med_sort_data_r[4]) begin
+				med_sort_data_w[1] = med_sort_data_r[4];
+				med_sort_data_w[4] = med_sort_data_r[1];
+			end
+			if(med_sort_data_r[2] > med_sort_data_r[5]) begin
+				med_sort_data_w[2] = med_sort_data_r[5];
+				med_sort_data_w[5] = med_sort_data_r[2];
+			end
 			med_stage_w = 8;
 		end
-		8: begin
-			result_w = med_result;
-			result_flag_w = 1;
+		8:begin
+			if(med_sort_data_r[2]>med_sort_data_r[4]) begin
+				med_sort_data_w[2] = med_sort_data_r[4];
+				med_sort_data_w[4] = med_sort_data_r[2];
+			end
 			med_stage_w = 9;
 		end
 		9: begin
-			med_channel_counter_w = med_channel_counter_r + 1;
-			med_stage_w = 0;
+			if(med_sort_data_r[4]>med_sort_data_r[6]) begin
+				med_sort_data_w[4] = med_sort_data_r[6];
+				med_sort_data_w[6] = med_sort_data_r[4];
+			end
+			med_stage_w = 10;
+		end
+		10: begin
+			if(med_sort_data_r[2]>med_sort_data_r[4]) begin
+				med_sort_data_w[2] = med_sort_data_r[4];
+				med_sort_data_w[4] = med_sort_data_r[2];
+			end
+			med_stage_w = 11;
+		end
+		11: begin
+			result_flag_w = 1;
+			result_w = med_sort_data_r[4];
+			if(med_region_counter_r == 3) begin
+				med_stage_w = 0;
+				med_channel_counter_w = med_channel_counter_r + 1;
+			end else begin
+				med_stage_w = 1;
+				med_region_counter_w = med_region_counter_r + 1;
+			end
 		end
 		default: begin
 		end
@@ -1174,13 +1212,16 @@ always @(posedge i_clk or negedge i_rst_n) begin
 		conv_channel_counter_r <= 0;
 		med_channel_counter_r <= 0;
 		med_region_counter_r <= 0;
-		for(i=0;i<9;i=i+1) begin
+		for(i=0;i<16;i=i+1) begin
 			med_temp_data_r[i] <= 0;
 		end
 		med_stage_r <= 0;
 		med_load_counter_r <= 0;
 		med_flag_valid_r <= med_flag_valid_w;
-		med_sort_temp_r <= 0;
+		for(i=0;i<9;i=i+1) begin
+			med_sort_data_r[i] <= 0;
+		end
+		med_region_counter_r <= med_region_counter_w; 
 	end
 	else begin
 		state_r <= state_w;
@@ -1205,13 +1246,16 @@ always @(posedge i_clk or negedge i_rst_n) begin
 		conv_channel_counter_r <=  conv_channel_counter_w;
 		med_channel_counter_r <= med_channel_counter_w;
 		med_region_counter_r <= med_region_counter_w;
-		for(i=0;i<9;i=i+1) begin
+		for(i=0;i<16;i=i+1) begin
 			med_temp_data_r[i] <= med_temp_data_w[i];
 		end
 		med_stage_r <= med_stage_w;
 		med_load_counter_r <= med_load_counter_w;
 		med_flag_valid_r <= med_flag_valid_w;
-		med_sort_temp_r <= med_sort_temp_w;
+		for(i=0;i<9;i=i+1) begin
+			med_sort_data_r[i] <= med_sort_data_w[i];
+		end
+		med_region_counter_r <= med_region_counter_w; 
 	end
 end
 
