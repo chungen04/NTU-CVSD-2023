@@ -1,3 +1,73 @@
+module sort9(
+	data_9,
+	sort9
+); // the sorted elements obtained to get the final median. 
+	input [71:0] data_9;
+	reg [7:0] a1, a2, a3, b1, b2, b3, c1, c2, c3;
+	output reg [71:0] sort9;
+	always @(*) begin
+		a1 = data_9[71:64];
+		a2 = data_9[63:56];
+		a3 = data_9[55:48];
+		b1 = data_9[47:40];
+		b2 = data_9[39:32];
+		b3 = data_9[31:24];
+		c1 = data_9[23:16];
+		c2 = data_9[15:8];
+		c3 = data_9[7:0];
+		if(a1>a2) {a1, a2} = {a2, a1};
+		if(a2>a3) {a2, a3} = {a3, a2};
+		if(a1>a2) {a1, a2} = {a2, a1};
+		if(b1>b2) {b1, b2} = {b2, b1};
+		if(b2>b3) {b2, b3} = {b3, b2};
+		if(b1>b2) {b1, b2} = {b2, b1};
+		if(c1>c2) {c1, c2} = {c2, c1};
+		if(c2>c3) {c2, c3} = {c3, c2};
+		if(c1>c2) {c1, c2} = {c2, c1};
+		sort9 = {a1, a2, a3, b1, b2, b3, c1, c2, c3};
+	end
+endmodule
+
+module sort9_2(
+	data_9,
+	sort9_2
+);
+	input [71:0] data_9;
+	reg [7:0] a1, a2, a3, b1, b2, b3, c1, c2, c3;
+	output reg [7:0] sort9_2; 
+	always @(*) begin
+		a1 = data_9[71:64];
+		a2 = data_9[63:56];
+		a3 = data_9[55:48];
+		b1 = data_9[47:40];
+		b2 = data_9[39:32];
+		b3 = data_9[31:24];
+		c1 = data_9[23:16];
+		c2 = data_9[15:8];
+		c3 = data_9[7:0];
+		if(a2>b2) begin 
+			{a1, b1} = {b1, a1};
+			{a2, b2} = {b2, a2};
+			{a3, b3} = {b3, a3};
+		end
+		if(b2>c2) begin
+			{b1, c1} = {c1, b1};
+			{b2, c2} = {c2, b2};
+			{b3, c3} = {c3, b3};
+		end
+		if(a2>b2) begin 
+			{a1, b1} = {b1, a1};
+			{a2, b2} = {b2, a2};
+			{a3, b3} = {b3, a3};
+		end
+		
+		if(a3>b2) {a3, b2} = {b2, a3};
+		if(b2>c1) {b2, c1} = {c1, b2};
+		if(a3>b2) {a3, b2} = {b2, a3};
+
+		sort9_2 = b2;
+	end
+endmodule
 
 module core (                       //Don't modify interface
 	input         i_clk,
@@ -18,6 +88,8 @@ module core (                       //Don't modify interface
 // ---- Add your own wires and registers here if needed ---- //
 
 parameter S_IDLE = 4'b1111;
+parameter S_WAIT_OP = 4'b1110;
+parameter S_GEN_OP = 4'b1101;
 parameter S_LOAD = 4'b0000;
 parameter S_O_RIGHT_SHIFT = 4'b0001;
 parameter S_O_LEFT_SHIFT = 4'b0010;
@@ -79,13 +151,38 @@ reg [18:0] conv_temp_round; // just for rounding
 
 reg [5:0] conv_channel_counter_r, conv_channel_counter_w; 
 
+// for MEDIAN operation
+reg [2:0] med_channel_counter_r, med_channel_counter_w; // 0~3, 4 channels
+reg [2:0] med_region_counter_r, med_region_counter_w; // 0~3, in raster scan order
+
+reg [7:0] med_temp_data_r [15:0];
+reg [7:0] med_temp_data_w [15:0]; // save the display region value.
+reg med_done; // do it when output is done.
+reg med_flag_valid_r, med_flag_valid_w;
+reg [4:0] med_stage_r, med_stage_w; // 0 for load
+reg [4:0] med_load_counter_r, med_load_counter_w; // from 0 to 16(counter to load values in)
+reg [71:0] med_sort_temp_r;
+wire [71:0] med_sort_temp_w; // sort pipeline register.
+reg [71:0] sort_in_stage_1;
+wire [7:0] med_result;
+
 sram_4096x8 mem(
    .Q(read_data),
    .CLK(i_clk),
-   .CEN(state_r == S_IDLE),
+   .CEN((state_r == S_IDLE) || (state_r == S_WAIT_OP) || (stater == S_GEN_OP)),
    .WEN(state_r != S_LOAD),
    .A(addr),
    .D(i_in_data)
+);
+
+sort9 sort_1(
+	.data_9(sort_in_stage_1),
+	.sort9(med_sort_temp_w)
+);
+
+sort9_2 sort_2(
+	.data_9(med_sort_temp_r),
+	.sort9_2(med_result)
 );
 
 // ---------------------------------------------------------------------------
@@ -93,8 +190,8 @@ sram_4096x8 mem(
 // ---------------------------------------------------------------------------
 // ---- Add your own wire data assignments here if needed ---- //
 
-assign o_op_ready = (state_r == S_IDLE);
-assign o_in_ready = 1;
+assign o_op_ready = (state_r == S_GEN_OP);
+assign o_in_ready = (state_r == S_LOAD);
 assign o_out_data = result_flag_r? ((state_r == S_OUTPUT_PIXEL)? result_w:result_r):0; // for S_OUTPUT_PIXEL, result delay valid one cycle. therefore use result_w.
 assign o_out_valid = result_flag_r;
 
@@ -108,7 +205,9 @@ always @(*) begin
 	state_w = state_r;
 
 	case(state_r)
-	S_IDLE: state_w = i_op_valid? i_op_mode:state_w;
+	S_IDLE: state_w = S_GEN_OP;
+	S_GEN_OP: state_w = S_WAIT_OP;
+	S_WAIT_OP: state_w = i_op_valid? i_op_mode:state_r;
 	S_LOAD: begin
 		// count to 2048
 		state_w = (load_counter_r == 2047? S_IDLE:S_LOAD);
@@ -134,6 +233,11 @@ always @(*) begin
 			state_w = S_IDLE;
 		end
 	end
+	S_MEDIAN: begin
+		if(med_stage_r == 3 && med_channel_counter_r ==3 && med_done) begin
+			state_w = S_IDLE;
+		end
+	end
 	default: begin
 	end
 	endcase
@@ -149,18 +253,31 @@ always @(*) begin
 	addr = 0;
 	result_w = result_r;
 	result_flag_w = 0;
-	haar_counter_w = haar_counter_r;
-	haar_read_counter_w = haar_read_counter_r;
+
 	conv_stage_counter_w = conv_stage_counter_r;
 	conv_temp_w = conv_temp_r;
 	conv_substage_counter_w = conv_substage_counter_r;
+
 	for(i=0; i<4;i=i+1) begin
 		conv_temp_core_w[i] = conv_temp_core_r[i];
 	end
 	conv_channel_counter_w =  conv_channel_counter_r; 
+	
+	haar_counter_w = haar_counter_r;
+	haar_read_counter_w = haar_read_counter_r;
 	for(i=0; i<4; i=i+1) begin
 		haar_buffer_w[i] = haar_buffer_r[i];
 	end
+
+	med_stage_w = (state_r == S_MEDIAN? med_stage_r: 0);
+	med_load_counter_w = (state_r == S_MEDIAN? med_load_counter_r: 0);
+	med_flag_valid_w = 0;
+	med_channel_counter_w = (state_r == S_MEDIAN? med_channel_counter_r: 0);
+	sort_in_stage_1 = 0;
+	for(i=0;i<9;i=i+1) begin
+		med_temp_data_w[i] = med_temp_data_r[i];
+	end
+
 	case(state_r)
 	S_IDLE: begin
 		display_counter_w = 0;
@@ -182,13 +299,13 @@ always @(*) begin
 		addr = load_counter_r;
 	end
 	S_O_RIGHT_SHIFT: begin
-		if(origin_x_r < 7) origin_x_w = origin_x_r + 1;
+		if(origin_x_r < 6) origin_x_w = origin_x_r + 1;
 	end
 	S_O_LEFT_SHIFT: begin
 		if(origin_x_r > 0) origin_x_w = origin_x_r - 1;
 	end
 	S_O_DOWN_SHIFT: begin
-		if(origin_y_r < 7) origin_y_w = origin_y_r + 1;
+		if(origin_y_r < 6) origin_y_w = origin_y_r + 1;
 	end
 	S_O_UP_SHIFT: begin
 		if(origin_y_r > 0) origin_y_w = origin_y_r - 1;
@@ -220,6 +337,250 @@ always @(*) begin
 		1: addr = origin_x_r + (origin_y_r << 3) + (display_counter_r[7:2] << 6) + 1;
 		2: addr = origin_x_r + (origin_y_r << 3) + (display_counter_r[7:2] << 6) + 8;
 		3: addr = origin_x_r + (origin_y_r << 3) + (display_counter_r[7:2] << 6) + 9;
+		default: begin
+		end
+		endcase
+	end
+	S_MEDIAN: begin
+		
+// reg [7:0] med_temp_data_r [8:0];
+// reg med_done; // do it when output is done.
+// reg [2:0] med_stage_r// 0 for load, 1 for first pass sort, 2 for second pass sort, 3 for output.
+// reg [3:0] med_load_counter_r// from 0 to 15(counter to load values in, all at once)
+		case(med_stage_r)
+		0: begin
+			// load
+			med_load_counter_w = med_load_counter_r + 1;
+			case(med_load_counter_r)
+			0: begin
+				if(origin_x_r != 0 && origin_y_r != 0) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r - 1 + ((origin_y_r - 1) << 3); 
+					med_flag_valid_w = 1;
+				end
+			end
+			1:begin
+				if(origin_y_r != 0) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r + ((origin_y_r - 1) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[0] = read_data;
+				end else begin
+					med_temp_data_w[0] = 0;
+				end
+			end
+			2: begin
+				if(origin_y_r != 0) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r + 1 + ((origin_y_r - 1) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[1] = read_data;
+				end else begin
+					med_temp_data_w[1] = 0;
+				end 
+			end
+			3:begin
+				if(origin_y_r != 0 && origin_x_r != 6) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r + 2 + ((origin_y_r - 1) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[2] = read_data;
+				end else begin
+					med_temp_data_w[2] = 0;
+				end
+			end
+			4:begin
+				if(origin_x_r != 0 ) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r - 1 + ((origin_y_r) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[3] = read_data;
+				end else begin
+					med_temp_data_w[3] = 0;
+				end
+			end
+			5:begin
+				addr = (med_channel_counter_r << 6) + origin_x_r + ((origin_y_r) << 3);
+				med_flag_valid_w = 1;
+				if(med_flag_valid_r) begin
+					med_temp_data_w[4] = read_data;
+				end else begin
+					med_temp_data_w[4] = 0;
+				end
+			end
+			6:begin
+				addr = (med_channel_counter_r << 6) + origin_x_r + 1 + ((origin_y_r) << 3);
+				med_flag_valid_w = 1;
+				if(med_flag_valid_r) begin
+					med_temp_data_w[5] = read_data;
+				end else begin
+					med_temp_data_w[5] = 0;
+				end
+			end
+			7:begin
+				if(origin_x_r != 6) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r + 2 + ((origin_y_r) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[6] = read_data;
+				end else begin
+					med_temp_data_w[6] = 0;
+				end
+			end
+			8:begin
+				if(origin_x_r != 0) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r - 1 + ((origin_y_r + 1) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[7] = read_data;
+				end else begin
+					med_temp_data_w[7] = 0;
+				end
+			end
+			9: begin
+				addr = (med_channel_counter_r << 6) + origin_x_r + ((origin_y_r + 1) << 3);
+				med_flag_valid_w = 1;
+				if(med_flag_valid_r) begin
+					med_temp_data_w[8] = read_data;
+				end else begin
+					med_temp_data_w[8] = 0;
+				end
+			end
+			10: begin
+				addr = (med_channel_counter_r << 6) + origin_x_r + 1 + ((origin_y_r + 1) << 3);
+				med_flag_valid_w = 1;
+				if(med_flag_valid_r) begin
+					med_temp_data_w[9] = read_data;
+				end else begin
+					med_temp_data_w[9] = 0;
+				end
+			end
+			11: begin
+				if(origin_x_r != 6) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r + 2 + ((origin_y_r + 1) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[10] = read_data;
+				end else begin
+					med_temp_data_w[10] = 0;
+				end
+			end
+			12: begin
+				if(origin_x_r != 0 && origin_y_r != 6) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r - 1 + ((origin_y_r + 2) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[11] = read_data;
+				end else begin
+					med_temp_data_w[11] = 0;
+				end
+			end
+			13: begin
+				if(origin_y_r != 6) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r + ((origin_y_r + 2) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[12] = read_data;
+				end else begin
+					med_temp_data_w[12] = 0;
+				end
+			end
+			14: begin
+				if(origin_y_r != 6) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r + 1 + ((origin_y_r + 2) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[13] = read_data;
+				end else begin
+					med_temp_data_w[13] = 0;
+				end
+			end
+			15: begin
+				if(origin_y_r != 6 && origin_x_r != 6) begin
+					addr = (med_channel_counter_r << 6) + origin_x_r + 2 + ((origin_y_r + 2) << 3);
+					med_flag_valid_w = 1;
+				end
+				if(med_flag_valid_r) begin
+					med_temp_data_w[14] = read_data;
+				end else begin
+					med_temp_data_w[14] = 0;
+				end
+			end
+			16: begin
+				if(med_flag_valid_r) begin
+					med_temp_data_w[15] = read_data;
+				end else begin
+					med_temp_data_w[15] = 0;
+				end
+				med_stage_w = med_stage_r + 1;
+			end
+			endcase
+		end
+		1:begin
+			// first region
+			sort_in_stage_1 = {med_temp_data_r[0], med_temp_data_r[1], med_temp_data_r[2], 
+				med_temp_data_r[4], med_temp_data_r[5], med_temp_data_r[6], 
+				med_temp_data_r[8], med_temp_data_r[9], med_temp_data_r[10]
+			};
+			med_stage_w = 2;
+		end
+		2:begin
+			result_w = med_result;
+			result_flag_w = 1;
+			med_stage_w = 3;
+		end
+		3:begin
+			// second region
+			sort_in_stage_1 = {med_temp_data_r[1], med_temp_data_r[2], med_temp_data_r[3], 
+				med_temp_data_r[5], med_temp_data_r[6], med_temp_data_r[7], 
+				med_temp_data_r[9], med_temp_data_r[10], med_temp_data_r[11]
+			};
+			med_stage_w = 4;
+		end
+		4: begin
+			result_w = med_result;
+			result_flag_w = 1;
+			med_stage_w = 5;
+		end
+		5:begin
+			// second region
+			sort_in_stage_1 = {med_temp_data_r[4], med_temp_data_r[5], med_temp_data_r[6], 
+				med_temp_data_r[8], med_temp_data_r[9], med_temp_data_r[10], 
+				med_temp_data_r[12], med_temp_data_r[13], med_temp_data_r[14]
+			};
+			med_stage_w = 6;
+		end
+		6: begin
+			result_w = med_result;
+			result_flag_w = 1;
+			med_stage_w = 7;
+		end
+		7:begin
+			// second region
+			sort_in_stage_1 = {med_temp_data_r[5], med_temp_data_r[6], med_temp_data_r[7], 
+				med_temp_data_r[9], med_temp_data_r[10], med_temp_data_r[11], 
+				med_temp_data_r[13], med_temp_data_r[14], med_temp_data_r[15]
+			};
+			med_stage_w = 8;
+		end
+		8: begin
+			result_w = med_result;
+			result_flag_w = 1;
+			med_stage_w = 9;
+		end
+		9: begin
+			med_channel_counter_w = med_channel_counter_r + 1;
+			med_stage_w = 0;
+		end
 		default: begin
 		end
 		endcase
@@ -811,7 +1172,15 @@ always @(posedge i_clk or negedge i_rst_n) begin
 			conv_temp_core_r[i] <= 0;
 		end
 		conv_channel_counter_r <= 0;
-
+		med_channel_counter_r <= 0;
+		med_region_counter_r <= 0;
+		for(i=0;i<9;i=i+1) begin
+			med_temp_data_r[i] <= 0;
+		end
+		med_stage_r <= 0;
+		med_load_counter_r <= 0;
+		med_flag_valid_r <= med_flag_valid_w;
+		med_sort_temp_r <= 0;
 	end
 	else begin
 		state_r <= state_w;
@@ -834,6 +1203,15 @@ always @(posedge i_clk or negedge i_rst_n) begin
 			conv_temp_core_r[i] <= conv_temp_core_w[i];
 		end
 		conv_channel_counter_r <=  conv_channel_counter_w;
+		med_channel_counter_r <= med_channel_counter_w;
+		med_region_counter_r <= med_region_counter_w;
+		for(i=0;i<9;i=i+1) begin
+			med_temp_data_r[i] <= med_temp_data_w[i];
+		end
+		med_stage_r <= med_stage_w;
+		med_load_counter_r <= med_load_counter_w;
+		med_flag_valid_r <= med_flag_valid_w;
+		med_sort_temp_r <= med_sort_temp_w;
 	end
 end
 
