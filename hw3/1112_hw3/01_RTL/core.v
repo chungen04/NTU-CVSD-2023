@@ -53,6 +53,32 @@ reg signed [13:0] haar_buffer_w [3:0];
 reg signed [13:0] haar_temp;
 integer i;
 
+//related to conv operation
+reg [18:0] conv_temp_r, conv_temp_w;
+//conv_temp saves the temporary sum of the outer channels.
+reg [18:0] conv_temp_core_r [3:0]; 
+reg [18:0] conv_temp_core_w [3:0];
+// conv_temp_core saves the sum of core's convolution.
+
+reg [3:0] conv_stage_counter_r, conv_stage_counter_w;
+//conv_stage = 5 send back to idle.
+// 0 means fetching the core.
+// 1 lets the core calculation be finished.
+// 1 fetches the upper left.
+// 2 output the first result.
+// 3 fetches the upper right.
+// 4 output the second result.
+// 5 fetches the lower left.
+// 6 output the third result.
+// 7 fetches the lower right.
+// 8 output the fourth result.
+reg [2:0] conv_substage_counter_r, conv_substage_counter_w;
+// for each substage, fetch different coordinate data. (also used for core convolution, of course)
+
+reg [18:0] conv_temp_round; // just for rounding
+
+reg [5:0] conv_channel_counter_r, conv_channel_counter_w; 
+
 sram_4096x8 mem(
    .Q(read_data),
    .CLK(i_clk),
@@ -103,6 +129,11 @@ always @(*) begin
 			state_w = S_IDLE;
 		end
 	end
+	S_CONV: begin
+		if(conv_stage_counter_r == 10) begin
+			state_w = S_IDLE;
+		end
+	end
 	default: begin
 	end
 	endcase
@@ -120,7 +151,13 @@ always @(*) begin
 	result_flag_w = 0;
 	haar_counter_w = haar_counter_r;
 	haar_read_counter_w = haar_read_counter_r;
-
+	conv_stage_counter_w = conv_stage_counter_r;
+	conv_temp_w = conv_temp_r;
+	conv_substage_counter_w = conv_substage_counter_r;
+	for(i=0; i<4;i=i+1) begin
+		conv_temp_core_w[i] = conv_temp_core_r[i];
+	end
+	conv_channel_counter_w =  conv_channel_counter_r; 
 	for(i=0; i<4; i=i+1) begin
 		haar_buffer_w[i] = haar_buffer_r[i];
 	end
@@ -132,6 +169,13 @@ always @(*) begin
 		end
 		haar_counter_w = 0;
 		haar_read_counter_w = 0;
+		conv_stage_counter_w = 0;
+		conv_temp_w = 0;
+		conv_substage_counter_w = 0;
+		for(i=0; i<4;i=i+1) begin
+			conv_temp_core_w[i] = 0;
+		end
+		conv_channel_counter_w = 0; 
 	end
 	S_LOAD: begin
 		load_counter_w = load_counter_r + 1;
@@ -235,19 +279,505 @@ always @(*) begin
 				result_flag_w = 0;
 				haar_counter_w = haar_counter_r + 7; // go to next one
 			end
-			10:begin
-			end
-			11:begin
-			end
-			12:begin
-			end
-			13:begin
-			end
-			14:begin
-			end
-			15:begin
+			default:begin
 			end
 		endcase
+	end
+	S_CONV: begin
+		conv_channel_counter_w = conv_channel_counter_r + 1;
+		result_flag_w = 0;
+		case(conv_stage_counter_r)
+		0:begin
+			if(conv_substage_counter_r >= 3 && conv_channel_counter_r == (depth_r<<3)-1) begin
+				conv_stage_counter_w = 1;
+				// perform calculation on 1.
+				conv_channel_counter_w = 0;
+				conv_substage_counter_w = 0;
+			end
+			else if(conv_channel_counter_r == (depth_r<<3)-1) begin
+				// move to next position
+				conv_substage_counter_w = conv_substage_counter_r + 1;
+				conv_channel_counter_w = 0;
+			end
+			case(conv_substage_counter_r)
+			0: begin
+				addr = (conv_channel_counter_r << 6) + 0 + origin_x_r + (origin_y_r << 3);
+				if(conv_channel_counter_r != 0) begin
+					conv_temp_core_w[0] = conv_temp_core_r[0] + (read_data);
+				end
+			end
+			1: begin
+				addr = (conv_channel_counter_r << 6) + 1 + origin_x_r + (origin_y_r << 3);
+				if(conv_channel_counter_r != 0) begin
+					conv_temp_core_w[1] = conv_temp_core_r[1] + (read_data);
+				end else begin
+					conv_temp_core_w[0] = conv_temp_core_r[0] + (read_data);
+				end
+			end
+			2: begin
+				addr = (conv_channel_counter_r << 6) + 8 + origin_x_r + (origin_y_r << 3);
+				if(conv_channel_counter_r != 0) begin
+					conv_temp_core_w[2] = conv_temp_core_r[2] + (read_data);
+				end else begin
+					conv_temp_core_w[1] = conv_temp_core_r[1] + (read_data);
+				end
+			end
+			3: begin
+				addr = (conv_channel_counter_r << 6) + 9 + origin_x_r + (origin_y_r << 3);
+				if(conv_channel_counter_r != 0) begin
+					conv_temp_core_w[3] = conv_temp_core_r[3] + (read_data);
+				end else begin
+					conv_temp_core_w[2] = conv_temp_core_r[2] + (read_data);
+				end
+			end
+			default: begin
+			end
+			endcase
+		end
+		1: begin
+			conv_temp_core_w[3] = conv_temp_core_r[3] + (read_data);
+			conv_stage_counter_w = 2;
+			conv_channel_counter_w = 0;
+		end
+		2:begin
+			if(conv_substage_counter_r > 4) begin
+				conv_stage_counter_w = 3;
+				conv_channel_counter_w = 0;
+				conv_substage_counter_w = 0;
+			end
+			else if(conv_channel_counter_r == (depth_r<<3)-1) begin
+				// move to next position
+				conv_substage_counter_w = conv_substage_counter_r + 1;
+				conv_channel_counter_w = 0;
+			end
+			case(conv_substage_counter_r)
+			0: begin
+				if(origin_x_r == 0 || origin_y_r == 0) begin
+					conv_substage_counter_w = 1;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r-1) << 3);
+					conv_temp_w = 0;
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r-1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else begin
+						conv_temp_w = 0;
+					end
+				end
+			end
+			1: begin
+				if(origin_x_r == 0) begin
+					conv_substage_counter_w = 2;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r) << 3);
+					if (!(origin_x_r == 0 || origin_y_r == 0)) begin // if y_r is 0, previous read data is meaningless.
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end else if (!(origin_x_r == 0 || origin_y_r == 0)) begin // if y_r is 0, previous read data is meaningless.
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end
+			end
+			2: begin
+				if(origin_x_r == 0) begin
+					conv_substage_counter_w = 3;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r + 1) << 3);
+					if(origin_x_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r + 1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else if(origin_x_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end
+			end
+			3: begin
+				if(origin_y_r == 0) begin
+					conv_substage_counter_w = 4;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + ((origin_y_r - 1) << 3);
+					if (origin_x_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + ((origin_y_r - 1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end else if (origin_x_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end
+			end
+			4: begin
+				if(origin_y_r == 0) begin
+					conv_substage_counter_w = 5;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 1 + ((origin_y_r - 1) << 3);
+					if (origin_y_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 1 + ((origin_y_r - 1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else if (origin_y_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end
+			end
+			5: begin
+				conv_temp_round = ((origin_y_r == 0? conv_temp_w: (conv_temp_r + (read_data << 0))) + (conv_temp_core_r[0]<<2) + (conv_temp_core_r[1]<<1) + (conv_temp_core_r[2]<<1) + (conv_temp_core_r[3]));
+				result_flag_w = 1;
+				result_w = (conv_temp_round>>4)+conv_temp_round[3];
+			end
+			default: begin
+			end
+			endcase
+		end
+		3:begin
+			// output second result.
+			conv_stage_counter_w = 4;
+			conv_channel_counter_w = 0;
+		end
+		4:begin
+			// calculate second one
+			if(conv_substage_counter_r > 4) begin
+				conv_stage_counter_w = 5;
+				conv_channel_counter_w = 0;
+				conv_substage_counter_w = 0;
+			end
+			else if(conv_channel_counter_r == (depth_r<<3)-1) begin
+				// move to next position
+				conv_substage_counter_w = conv_substage_counter_r + 1;
+				conv_channel_counter_w = 0;
+			end
+			case(conv_substage_counter_r)
+			0: begin
+				if(origin_x_r == 6 || origin_y_r == 0) begin
+					conv_substage_counter_w = 1;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r-1) << 3);
+					conv_temp_w = 0;
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r-1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else begin
+						conv_temp_w = 0;
+					end
+				end
+			end
+			1: begin
+				if(origin_x_r == 6 ) begin
+					conv_substage_counter_w = 2;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r) << 3);
+					if (!((origin_x_r == 6 || origin_y_r == 0))) begin // if y_r is 0, previous read data is meaningless.
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end else if (!((origin_x_r == 6 || origin_y_r == 0))) begin // if y_r is 0, previous read data is meaningless.
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end
+			end
+			2: begin
+				if(origin_x_r == 6) begin
+					conv_substage_counter_w = 3;
+					conv_channel_counter_w = 0;
+					if (origin_x_r != 6)begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r + 1) << 3);
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r + 1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else if (origin_x_r != 6)begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end
+			end
+			3: begin
+				if(origin_y_r ==0) begin
+					conv_substage_counter_w = 4;
+					conv_channel_counter_w = 0;
+					if (origin_x_r != 6) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 1 + ((origin_y_r - 1) << 3);
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 1 + ((origin_y_r - 1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end else if (origin_x_r != 6) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end
+			end
+			4: begin
+				if(origin_y_r ==0) begin
+					conv_substage_counter_w = 5;
+					conv_channel_counter_w = 0;
+					if (origin_y_r !=0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + ((origin_y_r - 1) << 3);
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + ((origin_y_r - 1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else if (origin_y_r !=0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end
+			end
+			5: begin
+			result_flag_w = 1;
+			conv_temp_round = ((origin_y_r !=0? (conv_temp_r + (read_data << 0)):conv_temp_w) + (conv_temp_core_r[0]<<1) + (conv_temp_core_r[1]<<2) + (conv_temp_core_r[2]) + (conv_temp_core_r[3]<<1));
+			result_w = (conv_temp_round>>4)+conv_temp_round[3];
+			end
+			default: begin
+			end
+			endcase
+		end
+		5:begin
+			conv_stage_counter_w = 6;
+			conv_channel_counter_w = 0;
+		end
+		6: begin
+			// calculate third one
+			if(conv_substage_counter_r > 4) begin
+				conv_stage_counter_w = 7;
+				conv_channel_counter_w = 0;
+				conv_substage_counter_w = 0;
+			end
+			else if(conv_channel_counter_r == (depth_r<<3)-1) begin
+				// move to next position
+				conv_substage_counter_w = conv_substage_counter_r + 1;
+				conv_channel_counter_w = 0;
+			end
+			case(conv_substage_counter_r)
+			0: begin
+				if(origin_x_r == 0 || origin_y_r == 6) begin
+					conv_substage_counter_w = 1;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r+2) << 3);
+					conv_temp_w = 0;
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r+2) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else begin
+						conv_temp_w = 0;
+					end
+				end
+			end
+			1: begin
+				if(origin_x_r == 0) begin
+					conv_substage_counter_w = 2;
+					conv_channel_counter_w = 0;
+					if (!(origin_x_r == 0 || origin_y_r == 6)) begin // if y_r is 0, previous read data is meaningless.
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r + 1) << 3);
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r + 1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end else if (!(origin_x_r == 0 || origin_y_r == 6)) begin // if y_r is 0, previous read data is meaningless.
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end
+			end
+			2: begin
+				if(origin_x_r == 0 ) begin
+					conv_substage_counter_w = 3;
+					conv_channel_counter_w = 0;
+					if (origin_x_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r) << 3);
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r - 1 + ((origin_y_r) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else if (origin_x_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end
+			end
+			3: begin
+				if(origin_y_r == 6) begin
+					conv_substage_counter_w = 4;
+					conv_channel_counter_w = 0;
+					if (origin_x_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + ((origin_y_r + 2) << 3);
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + ((origin_y_r + 2) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end else if (origin_x_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end
+			end
+			4: begin
+				if(origin_y_r == 6) begin
+					conv_substage_counter_w = 5;
+					conv_channel_counter_w = 0;
+					if(origin_y_r != 6)begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 1 + ((origin_y_r + 2) << 3);
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 1 + ((origin_y_r + 2) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else if(origin_y_r != 6)begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end
+			end
+			5: begin
+				result_flag_w = 1;
+				conv_temp_round = ((origin_y_r != 6? (conv_temp_r + (read_data << 0)):conv_temp_w) + (conv_temp_core_r[0]<<1) + (conv_temp_core_r[1]) + (conv_temp_core_r[2]<<2) + (conv_temp_core_r[3]<<1));
+				result_w = (conv_temp_round>>4)+conv_temp_round[3];
+			end
+			default: begin
+			end
+			endcase
+		end
+		7: begin
+			conv_stage_counter_w = 8;
+			conv_channel_counter_w = 0;
+		end
+		8: begin
+			// calculate fourth one
+			if(conv_substage_counter_r > 4) begin
+				conv_stage_counter_w = 9;
+				conv_channel_counter_w = 0;
+				conv_substage_counter_w = 0;
+			end
+			else if(conv_channel_counter_r == (depth_r<<3)-1) begin
+				// move to next position
+				conv_substage_counter_w = conv_substage_counter_r + 1;
+				conv_channel_counter_w = 0;
+			end
+			case(conv_substage_counter_r)
+			0: begin
+				if(origin_x_r == 6 || origin_y_r == 6) begin
+					conv_substage_counter_w = 1;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r+2) << 3);
+					conv_temp_w = 0;
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r+2) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else begin
+						conv_temp_w = 0;
+					end
+				end
+			end
+			1: begin
+				if(origin_x_r == 6) begin
+					conv_substage_counter_w = 2;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r+2  + ((origin_y_r+1) << 3);
+					if (!(origin_x_r == 6 || origin_y_r == 6)) begin // if y_r is 0, previous read data is meaningless.
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r+2  + ((origin_y_r+1) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end else if (!(origin_x_r == 6 || origin_y_r == 6)) begin // if y_r is 0, previous read data is meaningless.
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end
+			end
+			2: begin
+				if(origin_x_r == 6) begin
+					conv_substage_counter_w = 3;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r ) << 3);
+					if(origin_x_r != 6)begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + 2 + ((origin_y_r ) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else if(origin_x_r != 6)begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end
+			end
+			3: begin
+				if(origin_y_r == 6) begin
+					conv_substage_counter_w = 4;
+					conv_channel_counter_w = 0;
+					addr = (conv_channel_counter_r << 6)  + origin_x_r+1 + ((origin_y_r + 2) << 3);
+					if (origin_x_r != 6) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r+1 + ((origin_y_r + 2) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end else if (origin_x_r != 6) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end
+				end
+			end
+			4: begin
+				if(origin_y_r == 6) begin
+					conv_substage_counter_w = 5;
+					conv_channel_counter_w = 0;
+					if(origin_y_r != 6)begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + ((origin_y_r + 2) << 3);
+				end else begin
+					addr = (conv_channel_counter_r << 6)  + origin_x_r + ((origin_y_r + 2) << 3);
+					if(conv_channel_counter_r != 0) begin
+						conv_temp_w = conv_temp_r + (read_data << 0);
+					end else if(origin_y_r != 6)begin
+						conv_temp_w = conv_temp_r + (read_data << 1);
+					end
+				end
+			end
+			5: begin
+				result_flag_w = 1;
+				conv_temp_round = ((origin_y_r != 6? (conv_temp_r + (read_data << 0)):conv_temp_w) + (conv_temp_core_r[0]) + (conv_temp_core_r[1]<<1) + (conv_temp_core_r[2]<<1) + (conv_temp_core_r[3]<<2));
+				result_w = (conv_temp_round>>4)+conv_temp_round[3];
+			end
+			default: begin
+			end
+			endcase
+		end
+		9: begin
+			conv_stage_counter_w = 10;
+			conv_channel_counter_w = 0;
+		end
+		default: begin
+		end
+		endcase		
 	end
 	default: begin
 	end
@@ -274,6 +804,14 @@ always @(posedge i_clk or negedge i_rst_n) begin
 		for(i=0; i<4; i=i+1) begin
 			haar_buffer_r[i] = haar_buffer_w[i];
 		end
+		conv_stage_counter_r <= 0;
+		conv_temp_r <= 0;
+		conv_substage_counter_r <= 0;
+		for(i=0; i<4;i=i+1) begin
+			conv_temp_core_r[i] <= 0;
+		end
+		conv_channel_counter_r <= 0;
+
 	end
 	else begin
 		state_r <= state_w;
@@ -289,6 +827,13 @@ always @(posedge i_clk or negedge i_rst_n) begin
 		for(i=0; i<4; i=i+1) begin
 			haar_buffer_r[i] = haar_buffer_w[i];
 		end
+		conv_stage_counter_r <= conv_stage_counter_w;
+		conv_temp_r <= conv_temp_w;
+		conv_substage_counter_r <= conv_substage_counter_w;
+		for(i=0; i<4;i=i+1) begin
+			conv_temp_core_r[i] <= conv_temp_core_w[i];
+		end
+		conv_channel_counter_r <=  conv_channel_counter_w;
 	end
 end
 
